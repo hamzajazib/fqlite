@@ -5,6 +5,7 @@ import org.w3c.dom.Element;
 import org.w3c.dom.Node;
 import org.w3c.dom.NodeList;
 
+import fqlite.location.GPSParser;
 import fqlite.timemap.TacLocalDatabase;
 import fqlite.timemap.UliDecoder;
 
@@ -923,87 +924,13 @@ public class EtsiXmlImporter {
     }
 
     /**
-     * Converts an ETSI DMS coordinate (e.g. {@code N515715} or
-     * {@code E0144130}) into decimal degrees, rounded to 6 decimal places.
-     */
-    static Double parseDmsCoordinate(String raw) {
-        if (raw == null) return null;
-        raw = raw.trim();
-        if (raw.isEmpty()) return null;
-
-        char hemi = Character.toUpperCase(raw.charAt(0));
-        String digits = raw.substring(1);
-        int deg, min, sec;
-
-        // Some real-world exports (v1.26.1, hybrid NTSU+partyInformation shape)
-        // append decimal fractional seconds to the integer DMS string, e.g.
-        // "N513746.02" (= 51°37'46.02") or "E0133743.91" (= 13°37'43.91").
-        // Split on the decimal point so the length check below only sees the
-        // integer digits, then fold the fraction back in during degree conversion.
-        double fracSec = 0.0;
-        int dotIdx = digits.indexOf('.');
-        if (dotIdx >= 0) {
-            String fracStr = digits.substring(dotIdx); // ".02"
-            try { fracSec = Double.parseDouble("0" + fracStr); } catch (NumberFormatException ignored) { }
-            digits = digits.substring(0, dotIdx);
-        }
-
-        if (hemi == 'N' || hemi == 'S') {
-            if (digits.length() != 6) return null;
-            deg = Integer.parseInt(digits.substring(0, 2));
-            min = Integer.parseInt(digits.substring(2, 4));
-            sec = Integer.parseInt(digits.substring(4, 6));
-        } else if (hemi == 'E' || hemi == 'W') {
-            // Allow exactly one optional leading-zero omission (6 → 7 digits).
-            // Do NOT pad shorter strings: "013" from "E013.7655" (decimal degrees)
-            // must fall through to parseDecDegCoordinate, not be mis-parsed as DMS.
-            if (digits.length() == 6) digits = "0" + digits;
-            if (digits.length() != 7) return null;
-            deg = Integer.parseInt(digits.substring(0, 3));
-            min = Integer.parseInt(digits.substring(3, 5));
-            sec = Integer.parseInt(digits.substring(5, 7));
-        } else {
-            return null;
-        }
-
-        double decimal = deg + min / 60.0 + (sec + fracSec) / 3600.0;
-        if (hemi == 'S' || hemi == 'W') {
-            decimal = -decimal;
-        }
-        return Math.round(decimal * 1_000_000.0) / 1_000_000.0;
-    }
-
-    /**
-     * Converts a decimal-degree coordinate string as used by
-     * {@code <geoCoordinatesDec>} (e.g. {@code N51.5046}, {@code E013.7854})
-     * into a signed decimal degree value, rounded to 6 decimal places.
-     * Returns {@code null} if the input cannot be parsed.
-     */
-    static Double parseDecDegCoordinate(String raw) {
-        if (raw == null) return null;
-        raw = raw.trim();
-        if (raw.isEmpty()) return null;
-        char hemi = Character.toUpperCase(raw.charAt(0));
-        if (hemi != 'N' && hemi != 'S' && hemi != 'E' && hemi != 'W') return null;
-        try {
-            double val = Double.parseDouble(raw.substring(1));
-            if (hemi == 'S' || hemi == 'W') val = -val;
-            return Math.round(val * 1_000_000.0) / 1_000_000.0;
-        } catch (NumberFormatException e) {
-            return null;
-        }
-    }
-
-    /**
-     * Tries DMS parsing first ({@link #parseDmsCoordinate}); if that returns
-     * {@code null} (e.g. for a decimal-degree value like {@code N51.5046}),
-     * falls back to {@link #parseDecDegCoordinate}. Handles both
-     * {@code <geoCoordinates>} and {@code <geoCoordinatesDec>} raw values.
+     * Converts an ETSI coordinate string — DMS ({@code N515715}), compass-
+     * prefixed decimal degrees ({@code N51.5046}), or a hemisphere-less plain
+     * decimal ({@code 51.5046}) — into a signed decimal degree value. See
+     * {@link GPSParser#parseAnyCoordinate(String)} for the full fallback chain.
      */
     static Double parseAnyCoordinate(String raw) {
-        if (raw == null) return null;
-        Double dms = parseDmsCoordinate(raw);
-        return (dms != null) ? dms : parseDecDegCoordinate(raw);
+        return GPSParser.parseAnyCoordinate(raw);
     }
 
     private static final Pattern KEY_VALUE_PATTERN = Pattern.compile("\"([^\"]+)\"\\s*=\\s*\"([^\"]*)\"");

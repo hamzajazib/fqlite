@@ -1,5 +1,7 @@
 package fqlite.timemap;
 
+import fqlite.location.GPSParser;
+
 import java.time.Instant;
 import java.time.LocalDateTime;
 import java.time.ZoneOffset;
@@ -499,18 +501,21 @@ public class DataAnalyzer {
                 timestamp = parseTimestamp(cell(r, idxEndTime));
 
             // ── Coordinates ──────────────────────────────────────────────────
+            // Prefer the precomputed latitude_dec/longitude_dec columns (a
+            // plain Double.parseDouble is enough there). Some records end up
+            // with NULL there anyway -- e.g. providers whose XML export uses
+            // a decimal-degree coordinate with no N/S/E/W hemisphere prefix,
+            // which older importer runs failed to convert -- so fall back to
+            // re-parsing the untouched latitude_raw/longitude_raw text via
+            // GPSParser's fuller DMS/decimal/hemisphere-less parser instead of
+            // silently dropping the point from the map.
             GeoCoordinate coord = null;
-            String latStr = cell(r, idxLatitude);
-            String lonStr = cell(r, idxLongitude);
-            if (latStr != null && !latStr.isBlank()
-                    && lonStr != null && !lonStr.isBlank()) {
-                try {
-                    double lat = Double.parseDouble(latStr.trim());
-                    double lon = Double.parseDouble(lonStr.trim());
-                    if (isValidLat(lat) && isValidLon(lon))
-                        coord = new GeoCoordinate(lat, lon);
-                } catch (NumberFormatException ignored) {}
-            }
+            Double lat = parseDecimalCell(cell(r, idxLatitude));
+            Double lon = parseDecimalCell(cell(r, idxLongitude));
+            if (lat == null) lat = GPSParser.parseAnyCoordinate(cell(r, idxLtRaw));
+            if (lon == null) lon = GPSParser.parseAnyCoordinate(cell(r, idxLoRaw));
+            if (lat != null && lon != null && isValidLat(lat) && isValidLon(lon))
+                coord = new GeoCoordinate(lat, lon);
 
             // Skip rows that carry neither timestamp nor coordinates.
             if (timestamp == null && coord == null) {
@@ -568,6 +573,16 @@ public class DataAnalyzer {
     /** Safely retrieves a cell value; returns {@code null} for out-of-range or negative indices. */
     private static String cell(List<String> row, int idx) {
         return (idx >= 0 && idx < row.size()) ? row.get(idx) : null;
+    }
+
+    /** Parses a plain (already hemisphere-free) decimal-degree cell, or {@code null} if blank/unparseable. */
+    private static Double parseDecimalCell(String s) {
+        if (s == null || s.isBlank()) return null;
+        try {
+            return Double.parseDouble(s.trim());
+        } catch (NumberFormatException e) {
+            return null;
+        }
     }
 
     // -------------------------------------------------------------------------
@@ -690,7 +705,14 @@ public class DataAnalyzer {
         try {
             double v = Double.parseDouble(s.trim());
             return isValidLat(v) ? v : null;
-        } catch (NumberFormatException e) { return null; }
+        } catch (NumberFormatException e) {
+            // Not a bare number -- could be a compass-prefixed ETSI value
+            // (e.g. "N51.3818" or "N515715") in a column this heuristic
+            // path matched by name alone (no parallel "_dec" column to
+            // fall back to, unlike the response_records fixed-schema path).
+            Double v = GPSParser.parseAnyCoordinate(s);
+            return (v != null && isValidLat(v)) ? v : null;
+        }
     }
 
     private Double parseValidLon(String s) {
@@ -698,7 +720,10 @@ public class DataAnalyzer {
         try {
             double v = Double.parseDouble(s.trim());
             return isValidLon(v) ? v : null;
-        } catch (NumberFormatException e) { return null; }
+        } catch (NumberFormatException e) {
+            Double v = GPSParser.parseAnyCoordinate(s);
+            return (v != null && isValidLon(v)) ? v : null;
+        }
     }
 
     // -------------------------------------------------------------------------
